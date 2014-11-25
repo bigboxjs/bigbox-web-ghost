@@ -11,9 +11,9 @@ define(function(require, exports, module) {
 	
 	// TODO 这里获取模板引擎的代码应该做成按需加载，以及可配置的
 	var template = {
-		html: require("./html"),
-		ejs: require("./ejs"),
-		handlebars: require("./handlebars")
+		html: require("./template/html"),
+		ejs: require("./template/ejs"),
+		handlebars: require("./template/handlebars")
 	};
 
 	/**
