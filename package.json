@@ -1,0 +1,10 @@
+{
+  "name": "bigbox-web-browserside",
+  "version": "0.0.2",
+  "main": "index.js",
+  "description": "bigbox-web-browserside是浏览器端进行Web请求处理的核心",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bigboxjs/bigbox-web-browserside"
+  }
+}
