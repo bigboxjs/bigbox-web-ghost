@@ -108,52 +108,67 @@ define(function(require, exports, module) {
 			var callbacks = Callbacks(function() {
 				callback(boxes);
 			});
-			controllers.forEach((function(controller, index) {
+			controllers.forEach(function(controller, index) {
 				var pathNow = paths[index];
-				var callback = callbacks.add(function(box) {
-					box.boxID = pathNow.pathname;
-					if (typeof box.query == "string" && box.query.length > 0) {
-						box.boxID += "?" + box.query;
-						delete box.query;
-					}
-					boxes[index] = box;
-				});
 
+				// 构造req数据
 				var boxReq = {
 					uri: uri,
 					pathname: pathname,
 					params: mergeObject(params, pathNow.query),
-					cookies: req.cookies
+					cookies: req.cookies,
+					dna: {}
 				};
 
-				// 如果存在之前的query信息，那就解析之
-				// 这里还是有bug的，比如一个referBoxesID列表中，两头的有变化，但是中间的没有变化，这是中间的会出现问题
-				if (index in referBoxesID) {
-					boxReq.referQuery = parseBoxID(referBoxesID[index]).query;
+				// 构建box渲染完成的回调方法
+				var gatBox = function(box) {
+					box.boxID = pathNow.pathname;
+					var query = box.query;
+					if (typeof query == "string" && query.length > 0) {
+						box.boxID += "?" + query;
+						delete box.query;
+					}
+					boxes[index] = box;
+				};
+
+				// 获取当前box的query数据
+				if (controller.dna) {
+					boxReq.dna = controller.dna(boxReq) || {};
 				}
 
-				var box = controller.deal(boxReq, this, callback);
-				if (typeof box == 'object' && !!box) {
-					callback(box);
+				// 如果存在之前的query信息，那就解析之
+				// TODO 这里还是有bug的，比如一个referBoxesID列表中，两头的有变化，但是中间的没有变化，这是中间的会出现问题
+				if (index in referBoxesID) {
+					var referBoxID = parseBoxID(referBoxesID[index]);
+
+					// 如果前后的box数据相同，则直接构造一个假的box返回
+					if (pathNow.pathname == referBoxID.pathname
+						&& objEqual(boxReq.dna, referBoxID.query)
+					) {
+						// 前后数据相同
+						gatBox({
+							query: referBoxID.querystring
+						});
+						return;
+					}
 				}
-			}).bind(this));
+
+				// 需要重新执行，拿到最终的数据
+				var boxRes = {
+					render: this._render.bind(this, callbacks.add(function(content) {
+						gatBox({
+							query: stringify(boxReq.dna),
+							content: content
+						});
+					}))
+				};
+				controller.deal(boxReq, boxRes);
+			}, this);
+			callbacks.check();
 
 			// FIXME box异常的情况需要考虑
 		}).bind(this));
 	};
-
-	/**
-	 * 解析boxid
-	 * @param id
-	 * @returns {{pathname: T, query: string}}
-	 */
-	function parseBoxID(id) {
-		var ids = id.split("?");
-		return {
-			pathname: ids.shift(),
-			query: ids.length == 0 ? "" : ids.join("?")
-		};
-	}
 
 	/**
 	 * 通过一个url获得其对应的path列表
@@ -262,35 +277,6 @@ define(function(require, exports, module) {
 
 		return results;
 	};
-
-	/**
-	 * 验证指定的字符串是否匹配
-	 * @param reg
-	 * @param string
-	 * @returns {boolean}
-	 */
-	function match(reg, string) {
-		return reg.test(string);
-	}
-
-	/**
-	 * 针对pathname的验证器
-	 * @param reg
-	 * @param names
-	 * @param string
-	 * @returns {*}
-	 */
-	function pathnameMatch(reg, names, string) {
-		var pathname = UrlUtil.parse(string).pathname;
-		var results = reg.exec(pathname);
-		if (!results) return false;
-
-		var data = {};
-		for (var i = 0, il = names.length; i < il; i++) {
-			data[names[i]] = results[i + 1];
-		}
-		return data;
-	}
 
 	/**
 	 * 通过path列表获得其对应的controller列表
@@ -552,11 +538,12 @@ define(function(require, exports, module) {
 
 	/**
 	 * 把数据和模板拼合，构造结果
+	 * @param callback
 	 * @param path
 	 * @param data
 	 * @returns {{}}
 	 */
-	Router.prototype.render = function(path, data, callback) {
+	Router.prototype._render = function(callback, path, data) {
 		// 获取指定路径对应的html结构化数据
 		var extName = PathUtil.extname(path);
 		var realPath = path + ".js";
@@ -597,6 +584,35 @@ define(function(require, exports, module) {
 			results = result;
 		}));
 	};
+
+	/**
+	 * 验证指定的字符串是否匹配
+	 * @param reg
+	 * @param string
+	 * @returns {boolean}
+	 */
+	function match(reg, string) {
+		return reg.test(string);
+	}
+
+	/**
+	 * 针对pathname的验证器
+	 * @param reg
+	 * @param names
+	 * @param string
+	 * @returns {*}
+	 */
+	function pathnameMatch(reg, names, string) {
+		var pathname = UrlUtil.parse(string).pathname;
+		var results = reg.exec(pathname);
+		if (!results) return false;
+
+		var data = {};
+		for (var i = 0, il = names.length; i < il; i++) {
+			data[names[i]] = results[i + 1];
+		}
+		return data;
+	}
 
 	/**
 	 * 复制一个对象
@@ -642,6 +658,70 @@ define(function(require, exports, module) {
 		return function(arg1) {
 			return arg1 == value;
 		};
+	}
+
+	/**
+	 * 把map对象变更为querystring
+	 * @param object
+	 * @returns {string}
+	 */
+	function stringify(object) {
+		var str = [];
+		for (var name in object) {
+			str.push(name + "=" + object[name]);
+		}
+		return str.join("&");
+	}
+
+	/**
+	 * 解析boxid
+	 * @param id
+	 * @returns {{pathname: T, query: string}}
+	 */
+	function parseBoxID(id) {
+		var ids = id.split("?");
+		var info = {
+			pathname: ids.shift(),
+			querystring: ids.length == 0 ? "" : ids.join("?")
+		};
+		info.query = info.querystring.length == 0 ? {} : parseQuery(info.querystring);
+		return info;
+	}
+
+	/**
+	 * 解析查询字符串
+	 * @param query
+	 * @returns {{}}
+	 */
+	function parseQuery(query) {
+		var object = {};
+		query.split("&").forEach(function(item) {
+			item = item.split("=");
+			object[item.shift()] = item.join("=");
+		});
+		return object;
+	}
+
+	/**
+	 * 判断两个对象是否绝对相同
+	 * @param object1
+	 * @param object2
+	 * @returns {boolean}
+	 */
+	function objEqual(object1, object2) {
+		if (typeof object1 != "object" || typeof object2 != "object") return false;
+		if (object1 == null || object2 == null) {
+			if (object1 != object2) return false;
+		}
+
+		for (var name in object1) {
+			if (!(name in object2) || (object1[name] !== object2[name])) return false;
+		}
+		for (var name in object2) {
+			if (!(name in object1) || (object2[name] !== object1[name])) return false;
+		}
+
+		return true;
 	}
 	
 	module.exports = Router;
