@@ -115,9 +115,9 @@ define(function(require, exports, module) {
 				var boxReq = {
 					uri: uri,
 					pathname: pathname,
-					params: mergeObject(params, pathNow.query),
+					query: mergeObject(params, pathNow.query),
 					cookies: req.cookies,
-					dna: {}
+					params: {}
 				};
 
 				// 构建box渲染完成的回调方法
@@ -131,9 +131,9 @@ define(function(require, exports, module) {
 					boxes[index] = box;
 				};
 
-				// 获取当前box的query数据
-				if (controller.dna) {
-					boxReq.dna = controller.dna(boxReq) || {};
+				// 获取当前box的params数据
+				if (controller.params) {
+					boxReq.params = controller.params(boxReq) || {};
 				}
 
 				// 如果存在之前的query信息，那就解析之
@@ -143,7 +143,7 @@ define(function(require, exports, module) {
 
 					// 如果前后的box数据相同，则直接构造一个假的box返回
 					if (pathNow.pathname == referBoxID.pathname
-						&& objEqual(boxReq.dna, referBoxID.query)
+						&& objEqual(boxReq.params, referBoxID.query)
 					) {
 						// 前后数据相同
 						gatBox({
@@ -157,7 +157,7 @@ define(function(require, exports, module) {
 				var boxRes = {
 					render: this._render.bind(this, callbacks.add(function(content) {
 						gatBox({
-							query: stringify(boxReq.dna),
+							query: stringify(boxReq.params),
 							content: content
 						});
 					}))
@@ -171,111 +171,142 @@ define(function(require, exports, module) {
 	};
 
 	/**
+	 * 构建uri匹配信息
+	 * @private
+	 */
+	Router.prototype._buildUriMatches = function() {
+		var config = this._config;
+		var uris = config.uris;
+
+		// 建立uri匹配缓存
+		var uriMatches = config._uriMatches = {};
+		for (var name in uris) {
+			if (name.charAt(0) == "^" || name.charAt(name.length - 1) == "$") {
+				// 这是正则
+				// FIXME 这个验证有些粗糙
+				uriMatches[name] = match.bind(this, new RegExp(name));
+			} else if (name.indexOf("}}") > name.indexOf("{{")) {
+				// 这是变量形式
+
+				// 获取变量信息
+				// FIXME 这块可以优化，通过正则表达式解析
+				var startStr = "{{";
+				var startLen = startStr.length;
+				var startIndex = -1;
+				var endStr = "}}";
+				var endLen = endStr.length;
+				var endIndex = -1;
+				var i = 0;
+				var regStr = [];
+				var names = [];
+				while((startIndex = name.indexOf(startStr, i)) != -1) {
+					if (startIndex > i) {
+						regStr.push(name.substring(i, startIndex));
+					}
+
+					endIndex = name.indexOf(endStr, startIndex);
+					i = endIndex + endLen;
+
+					names.push(name.substring(startIndex + startLen, endIndex));
+					regStr.push("([^/]+)");
+				}
+				if (i < name.length - 1) {
+					regStr.push(name.substring(i));
+				}
+
+				regStr = regStr.join("");
+
+				// 生成验证字符串
+				uriMatches[name] = pathnameMatch.bind(this, new RegExp(regStr), names);
+			} else {
+				uriMatches[name] = isEqual2Me(name);
+			}
+		}
+
+		return uriMatches;
+	};
+
+	/**
 	 * 通过一个url获得其对应的path列表
 	 * @param url
 	 * @returns {Array}
 	 */
 	Router.prototype.paths = function(url) {
-		var results = [];
 		var config = this._config;
-
-		/*// 如果没有把path预先转化为正则，那就转化之
-		 var uriRegs = config.uriRegs;
-		 if (!uriRegs) {
-		 uriRegs = config.uriRegs = {};
-		 var uris = config.uris;
-		 for (var name in uris) {
-		 uriRegs[name] = new RegExp(name);
-		 }
-		 }*/
-
-		var uriCaches = config._uriCaches;
-		if (!uriCaches) {
-			uriCaches = config._uriCaches = {};
-			var uris = config.uris;
-			for (var name in uris) {
-				if (name.charAt(0) == "^" || name.charAt(name.length - 1) == "$") {
-					// 这是正则
-					// FIXME 这个验证有些粗糙
-					uriCaches[name] = match.bind(this, new RegExp(name));
-				} else if (name.indexOf("}}") > name.indexOf("{{")) {
-					// 这是变量形式
-
-					// 获取变量信息
-					// FIXME 这块可以优化，通过正则表达式解析
-					var startStr = "{{";
-					var startLen = startStr.length;
-					var startIndex = -1;
-					var endStr = "}}";
-					var endLen = endStr.length;
-					var endIndex = -1;
-					var i = 0;
-					var regStr = [];
-					var names = [];
-					while((startIndex = name.indexOf(startStr, i)) != -1) {
-						if (startIndex > i) {
-							regStr.push(name.substring(i, startIndex));
-						}
-
-						endIndex = name.indexOf(endStr, startIndex);
-						i = endIndex + endLen;
-
-						names.push(name.substring(startIndex + startLen, endIndex));
-						regStr.push("([^/]+)");
-					}
-					if (i < name.length - 1) {
-						regStr.push(name.substring(i));
-					}
-
-					regStr = regStr.join("");
-
-					// 生成验证字符串
-					uriCaches[name] = pathnameMatch.bind(this, new RegExp(regStr), names);
-				} else {
-					uriCaches[name] = isEqual2Me(name);
-				}
-			}
-		}
+		var uris = config.uris;
+		var uriMatches = config._uriMatches || this._buildUriMatches();
 
 		// 循环所有路径信息，找到匹配的规则
-		var paths = config.paths;
-		var ids;
-		for (var name in uriCaches) {
-			var isMatched = uriCaches[name](url);
-			if (isMatched) {
-				ids = config.uris[name];
+		for (var name in uriMatches) {
+			var isMatched = uriMatches[name](url);
+			if (!isMatched) continue;
 
-				var isParams = typeof isMatched == 'object';
-				ids.forEach(function(id, index) {
-					// 把信息转化为路径信息
-					if (typeof id != "object") {
-						var obj = UrlUtil.parse(id, true);
-						id = ids[index] = {
-							pathname: obj.pathname,
-							query: obj.query
-						};
-					}
+			var results = [];
 
-					var result = cloneObject(id);
-
-					// 如果存在参数信息，那就替换之
-					if (isParams) {
-						result.pathname = id.pathname.replace(/\{\{([^\}]+)\}\}/img, function(item) {
-							return isMatched[item.substring(2, item.length - 2)];
-						});
-
-						// FIXME 如果原来的参数中就存在，那也需要替换之
-					}
-
-					result.pathname = paths[result.pathname];
-					isParams && (result.query = isMatched);
-					results.push(result);
-				});
-				break;
+			// 如果没有对ids进行过预处理，那就先操作之
+			var ids = uris[name];
+			if (!ids.hadInited) {
+				ids = uris[name] = this._initBoxIDs(ids);
 			}
+
+			var isParams = typeof isMatched == 'object';
+			ids.forEach(function(id) {
+				var result = cloneObject(id);
+
+				// 如果存在参数信息，那就替换之
+				if (isParams) {
+					// 获得路径信息
+					result.pathname = id.pathname.replace(/\{\{([^\}]+)\}\}/g, function(item) {
+						return isMatched[item.substring(2, item.length - 2)];
+					});
+
+					// FIXME 如果原来的参数中就存在，那也需要替换之
+
+					// 混合查询信息
+					result.query = mergeObject(result.query, isMatched)
+				}
+				results.push(result);
+			});
+
+			return results;
+		}
+	};
+
+	/**
+	 * 初始化某个uri对应的boxid列表
+	 * @param boxIDs
+	 * @private
+	 */
+	Router.prototype._initBoxIDs = function(boxIDs) {
+		var ids = boxIDs;
+
+		// 如果存在替代路径信息，那就先把url进行处理
+		var paths = this._config.paths;
+		if (paths) {
+			ids = [];
+			boxIDs.forEach(function(id) {
+				if (paths[id]) {
+					// TODO 这里还需要考虑如果某一项也是一个引用的情况
+					ids = ids.concat(paths[id]);
+				} else {
+					ids.push(id);
+				}
+			});
 		}
 
-		return results;
+		// 循环每一个id，进行结构化
+		ids.forEach(function(id, index) {
+			var obj = UrlUtil.parse(id, true);
+			ids[index] = {
+				pathname: obj.pathname,
+				query: obj.query
+			};
+		});
+
+		// 设置已经经过初始化，不会再进行处理
+		ids.hadInited = true;
+
+		return ids;
 	};
 
 	/**
@@ -668,7 +699,7 @@ define(function(require, exports, module) {
 	function stringify(object) {
 		var str = [];
 		for (var name in object) {
-			str.push(name + "=" + object[name]);
+			str.push(name + "=" + encodeURIComponent(object[name]));
 		}
 		return str.join("&");
 	}
@@ -697,7 +728,7 @@ define(function(require, exports, module) {
 		var object = {};
 		query.split("&").forEach(function(item) {
 			item = item.split("=");
-			object[item.shift()] = item.join("=");
+			object[item.shift()] = decodeURIComponent(item.join("="));
 		});
 		return object;
 	}

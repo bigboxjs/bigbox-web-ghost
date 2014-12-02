@@ -15,7 +15,7 @@ define(function(require, exports, module) {
 	exports.stringify = function(object) {
 		var str = [];
 		for (var name in object) {
-			str.push(name + "=" + object[name]);
+			str.push(encodeURIComponent(name) + "=" + encodeURIComponent(object[name]));
 		}
 		return str.join("&");
 	};
@@ -25,10 +25,12 @@ define(function(require, exports, module) {
 	 * @param string
 	 */
 	exports.parse = function(querystring) {
+		if (querystring.length == 0) return {};
+
 		var object = {};
 		querystring.split("&").forEach(function(item) {
 			item = item.split("=");
-			object[item.shift()] = item.join("=");
+			object[decodeURIComponent(item.shift())] = decodeURIComponent(item.join("="));
 		});
 		return object;
 	};
